@@ -10,10 +10,12 @@ export function Pad({ slug }: { slug: string }) {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // poll for updates (~700ms) — works the same on LAN and serverless
+  // poll for updates (~2s), and only while the tab is visible — keeps the
+  // Redis command count low (a hidden/idle tab makes no requests)
   useEffect(() => {
     let alive = true;
     const tick = async () => {
+      if (document.hidden) return;
       try {
         const r = await fetch(`/api/pad/${slug}`, { cache: 'no-store' });
         const { text: incoming } = (await r.json()) as { text: string };
@@ -26,10 +28,15 @@ export function Pad({ slug }: { slug: string }) {
       }
     };
     tick();
-    const id = setInterval(tick, 700);
+    const id = setInterval(tick, 2000);
+    const onVisible = () => {
+      if (!document.hidden) tick(); // refresh immediately when tab regains focus
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       alive = false;
       clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [slug]);
 
