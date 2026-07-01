@@ -1,69 +1,50 @@
 # lan-pad
 
-A tiny **shared text pad over your LAN** — like Dontpad, but self-hosted in a single Python file with **zero dependencies**. Start it on your machine, share your IP, and anyone on the same network can open the same link, type, and see the text update in real time. One click copies everything.
+A shared **realtime** text pad over your LAN, built with Next.js. Type on one device, everyone on the same link sees it live. One click copies everything. **No database** — text lives in server memory and is broadcast over Server-Sent Events.
 
-Built for the simplest case: quickly move a snippet, link, or note from one device to another on the same Wi-Fi, without cloud, accounts, or install.
+## Stack
 
-## Features
+- Next.js 16 (App Router) · React 19 · Tailwind CSS v4 · TypeScript
+- Realtime via **SSE** (`EventSource`), no polling, no external service
+- **In-memory only** — a pad's text is held in one Node process and relayed to live subscribers
 
-- **Zero dependencies** — pure Python standard library. No `pip install`.
-- **Single file** — `lan_pad.py`, ~180 lines.
-- **Real-time sync** — everyone on the same pad sees changes within ~600ms (poll-based).
-- **Copy all** — one button, works even over plain HTTP via IP (clipboard API + legacy fallback).
-- **Multiple pads** — every URL path is its own pad: `/`, `/meeting`, `/notes`, …
-- **Dark UI**, mobile friendly.
-
-## Requirements
-
-Python 3.7+ (uses `ThreadingHTTPServer`). Nothing else.
-
-## Usage
+## Run
 
 ```bash
-python3 lan_pad.py            # port 8000
-python3 lan_pad.py 9000       # custom port
+npm install
+npm run build
+npm start          # serves on 0.0.0.0:3000 (reachable across the LAN)
 ```
 
-Find your machine's LAN IP:
+Dev mode:
 
 ```bash
-# macOS
-ipconfig getifaddr en0
-# Linux
-hostname -I
+npm run dev
 ```
 
-Then, from any device on the same network, open:
+Find your LAN IP and share it:
 
-```
-http://YOUR_IP:8000/
+```bash
+ipconfig getifaddr en0     # macOS
+hostname -I                # Linux
 ```
 
-Everyone on that URL shares the same pad. Use different paths for different pads:
-
-```
-http://YOUR_IP:8000/meeting
-http://YOUR_IP:8000/notes
-```
+Open `http://YOUR_IP:3000/` from any device on the network. Each path is its own pad: `/`, `/meeting`, `/notes`, …
 
 ## How it works
 
-- The server keeps each pad's text in memory, keyed by URL path, with a version counter.
-- The browser **pushes** what you type via `POST /api<path>` and **pulls** updates via `GET /api<path>` every 600ms.
-- While you're actively typing, incoming updates don't overwrite your text — so two people editing won't clobber mid-keystroke (last save wins per field, though; see limitations).
-- The "Copy all" button uses the async Clipboard API on HTTPS/localhost and falls back to a legacy off-screen-textarea `execCommand('copy')` over plain HTTP, since the Clipboard API only works in a secure context.
+- `src/lib/store.ts` — in-memory `Map<slug, { text, subscribers }>`.
+- `POST /api/pad/[slug]` — save text, broadcast to every live subscriber.
+- `GET /api/pad/[slug]/stream` — SSE stream: current text on connect, then every change.
+- `src/components/Pad.tsx` — client component: subscribes via `EventSource`, pushes debounced edits, copies with a plain-HTTP fallback.
 
 ## Limitations
 
-- **In-memory only** — pads reset when you stop the server. No persistence.
-- **No auth, no TLS** — anyone who can reach the port can read and write. Use on a trusted LAN only.
-- **Last-write-wins** — this is not a CRDT/OT collaborative editor. Great for handing text between devices, not for simultaneous heavy co-editing.
-- **Polling** — ~600ms latency by design; not WebSocket.
-
-## Firewall note (macOS)
-
-If other devices can't reach the port, allow incoming connections for Python in **System Settings → Network → Firewall**, or temporarily disable the firewall on a trusted network.
+- **No persistence** — restart the server and pads reset. By design (realtime relay, not storage).
+- **Single process** — works under `next start` on a LAN. **Not** suited to multi-instance serverless (e.g. Vercel), where memory isn't shared across instances and SSE is constrained. Add a shared store (Redis/KV) if you need that.
+- **No auth / no TLS** — trusted LAN only.
+- **Last-write-wins** — not a collaborative CRDT editor; great for moving text between devices.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT
