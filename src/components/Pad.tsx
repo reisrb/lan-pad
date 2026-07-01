@@ -14,6 +14,8 @@ export function Pad({ slug }: { slug: string }) {
   const lastActivity = useRef(0);
   const lastSeen = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loopRef = useRef<(() => void) | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   // Adaptive polling: fast (2s) while active, slow (15s) once idle. Activity =
@@ -21,16 +23,16 @@ export function Pad({ slug }: { slug: string }) {
   // requests. Keeps Redis command usage low without ever going fully blind.
   useEffect(() => {
     let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const schedule = () => {
       if (!alive) return;
       const active = Date.now() - lastActivity.current < IDLE_AFTER;
-      timer = setTimeout(loop, active ? ACTIVE_MS : IDLE_MS);
+      pollTimer.current = setTimeout(loop, active ? ACTIVE_MS : IDLE_MS);
     };
 
     const loop = async () => {
       if (!alive) return;
+      if (pollTimer.current) clearTimeout(pollTimer.current); // coalesce manual/scheduled calls
       if (!document.hidden) {
         try {
           const r = await fetch(`/api/pad/${slug}`, { cache: 'no-store' });
@@ -51,21 +53,27 @@ export function Pad({ slug }: { slug: string }) {
       schedule();
     };
 
+    loopRef.current = loop;
     loop();
     const onVisible = () => {
       if (!document.hidden) {
         lastActivity.current = Date.now(); // refocus = active
-        if (timer) clearTimeout(timer);
         loop();
       }
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       alive = false;
-      if (timer) clearTimeout(timer);
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+      loopRef.current = null;
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [slug]);
+
+  const refreshNow = () => {
+    lastActivity.current = Date.now(); // manual refresh = active -> back to fast poll
+    loopRef.current?.();
+  };
 
   // push local edits (debounced)
   const push = useCallback(
@@ -127,6 +135,13 @@ export function Pad({ slug }: { slug: string }) {
       <header className="flex items-center gap-3 border-b border-neutral-700 bg-neutral-800 px-3 py-2">
         <b className="text-teal-400">pad</b>
         <span className="text-neutral-400">/{slug}</span>
+        <button
+          onClick={refreshNow}
+          title="Fetch the latest now"
+          className="rounded bg-neutral-700 px-3 py-1 text-sm text-white hover:bg-neutral-600"
+        >
+          ↻ Refresh
+        </button>
         <button
           onClick={copyAll}
           className="rounded bg-sky-700 px-3 py-1 text-sm text-white hover:bg-sky-600"
