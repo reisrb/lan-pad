@@ -7,7 +7,7 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
-  return Response.json({ text: getText(slug) });
+  return Response.json({ text: await getText(slug) });
 }
 
 export async function POST(
@@ -16,6 +16,6 @@ export async function POST(
 ) {
   const { slug } = await params;
   const body = (await req.json().catch(() => ({}))) as { text?: string };
-  setText(slug, body.text ?? '');
+  await setText(slug, body.text ?? '');
   return Response.json({ ok: true });
 }

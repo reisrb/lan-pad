@@ -6,23 +6,34 @@ export function Pad({ slug }: { slug: string }) {
   const [text, setText] = useState('');
   const [status, setStatus] = useState('connecting…');
   const editing = useRef(false);
+  const dirty = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // subscribe to realtime updates via SSE
+  // poll for updates (~700ms) — works the same on LAN and serverless
   useEffect(() => {
-    const es = new EventSource(`/api/pad/${slug}/stream`);
-    es.onopen = () => setStatus('live');
-    es.onmessage = (e) => {
-      const { text: incoming } = JSON.parse(e.data) as { text: string };
-      // don't clobber what you're typing right now
-      if (!editing.current) setText(incoming);
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await fetch(`/api/pad/${slug}`, { cache: 'no-store' });
+        const { text: incoming } = (await r.json()) as { text: string };
+        if (!alive) return;
+        setStatus('live');
+        // don't clobber your own unsaved typing
+        if (!(editing.current && dirty.current)) setText(incoming);
+      } catch {
+        if (alive) setStatus('offline — retrying…');
+      }
     };
-    es.onerror = () => setStatus('offline — retrying…');
-    return () => es.close();
+    tick();
+    const id = setInterval(tick, 700);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, [slug]);
 
-  // push local edits (debounced), server broadcasts to everyone else
+  // push local edits (debounced)
   const push = useCallback(
     (value: string) => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -31,13 +42,18 @@ export function Pad({ slug }: { slug: string }) {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ text: value }),
-        }).catch(() => {});
+        })
+          .then(() => {
+            dirty.current = false;
+          })
+          .catch(() => {});
       }, 250);
     },
     [slug]
   );
 
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    dirty.current = true;
     setText(e.target.value);
     push(e.target.value);
   };

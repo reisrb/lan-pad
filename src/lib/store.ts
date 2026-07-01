@@ -1,41 +1,28 @@
-// In-memory only. No DB. Each pad = last text + a set of live SSE subscribers.
-// State lives in one Node process, so this works under `next start` on a LAN,
-// not on multi-instance serverless. Restart = wiped. That's by design.
+// Pad state. Two backends, picked at runtime:
+//   - Upstash Redis (REST) when UPSTASH_REDIS_REST_URL/TOKEN are set — works on
+//     multi-instance serverless (Vercel), shared across all instances.
+//   - In-memory fallback otherwise — single process, perfect for LAN `next start`.
+// No SSE: clients poll, so it behaves identically on both backends.
+import { Redis } from '@upstash/redis';
 
-type Subscriber = (text: string) => void;
+const url = process.env.UPSTASH_REDIS_REST_URL;
+const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+const redis = url && token ? new Redis({ url, token }) : null;
 
-interface Pad {
-  text: string;
-  subs: Set<Subscriber>;
+const key = (slug: string) => `lanpad:${slug}`;
+
+// in-memory fallback (survives dev HMR)
+const g = globalThis as unknown as { __lanpad?: Map<string, string> };
+const mem: Map<string, string> = g.__lanpad ?? (g.__lanpad = new Map());
+
+export async function getText(slug: string): Promise<string> {
+  if (redis) return (await redis.get<string>(key(slug))) ?? '';
+  return mem.get(slug) ?? '';
 }
 
-// survive dev HMR module reloads
-const g = globalThis as unknown as { __lanpad?: Map<string, Pad> };
-const pads: Map<string, Pad> = g.__lanpad ?? (g.__lanpad = new Map());
-
-function pad(slug: string): Pad {
-  let p = pads.get(slug);
-  if (!p) {
-    p = { text: '', subs: new Set() };
-    pads.set(slug, p);
-  }
-  return p;
+export async function setText(slug: string, text: string): Promise<void> {
+  if (redis) await redis.set(key(slug), text);
+  else mem.set(slug, text);
 }
 
-export function getText(slug: string): string {
-  return pad(slug).text;
-}
-
-export function setText(slug: string, text: string): void {
-  const p = pad(slug);
-  p.text = text;
-  for (const sub of p.subs) sub(text);
-}
-
-export function subscribe(slug: string, cb: Subscriber): () => void {
-  const p = pad(slug);
-  p.subs.add(cb);
-  return () => {
-    p.subs.delete(cb);
-  };
-}
+export const usingRedis = redis !== null;
