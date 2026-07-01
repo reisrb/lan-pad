@@ -2,40 +2,67 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+const ACTIVE_MS = 2000; // poll interval while the pad is active
+const IDLE_MS = 15000; // poll interval once idle (still catches remote edits)
+const IDLE_AFTER = 10000; // go idle after this long with no activity
+
 export function Pad({ slug }: { slug: string }) {
   const [text, setText] = useState('');
   const [status, setStatus] = useState('connecting…');
   const editing = useRef(false);
   const dirty = useRef(false);
+  const lastActivity = useRef(0);
+  const lastSeen = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // poll for updates (~2s), and only while the tab is visible — keeps the
-  // Redis command count low (a hidden/idle tab makes no requests)
+  // Adaptive polling: fast (2s) while active, slow (15s) once idle. Activity =
+  // local typing OR a remote change picked up by a poll. A hidden tab makes no
+  // requests. Keeps Redis command usage low without ever going fully blind.
   useEffect(() => {
     let alive = true;
-    const tick = async () => {
-      if (document.hidden) return;
-      try {
-        const r = await fetch(`/api/pad/${slug}`, { cache: 'no-store' });
-        const { text: incoming } = (await r.json()) as { text: string };
-        if (!alive) return;
-        setStatus('live');
-        // don't clobber your own unsaved typing
-        if (!(editing.current && dirty.current)) setText(incoming);
-      } catch {
-        if (alive) setStatus('offline — retrying…');
-      }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const schedule = () => {
+      if (!alive) return;
+      const active = Date.now() - lastActivity.current < IDLE_AFTER;
+      timer = setTimeout(loop, active ? ACTIVE_MS : IDLE_MS);
     };
-    tick();
-    const id = setInterval(tick, 2000);
+
+    const loop = async () => {
+      if (!alive) return;
+      if (!document.hidden) {
+        try {
+          const r = await fetch(`/api/pad/${slug}`, { cache: 'no-store' });
+          const { text: incoming } = (await r.json()) as { text: string };
+          if (!alive) return;
+          // a change from someone else counts as activity -> speed back up
+          if (lastSeen.current !== null && incoming !== lastSeen.current) {
+            lastActivity.current = Date.now();
+          }
+          lastSeen.current = incoming;
+          setStatus('live');
+          // don't clobber your own unsaved typing
+          if (!(editing.current && dirty.current)) setText(incoming);
+        } catch {
+          if (alive) setStatus('offline — retrying…');
+        }
+      }
+      schedule();
+    };
+
+    loop();
     const onVisible = () => {
-      if (!document.hidden) tick(); // refresh immediately when tab regains focus
+      if (!document.hidden) {
+        lastActivity.current = Date.now(); // refocus = active
+        if (timer) clearTimeout(timer);
+        loop();
+      }
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       alive = false;
-      clearInterval(id);
+      if (timer) clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [slug]);
@@ -61,6 +88,7 @@ export function Pad({ slug }: { slug: string }) {
 
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     dirty.current = true;
+    lastActivity.current = Date.now(); // typing keeps the fast poll alive
     setText(e.target.value);
     push(e.target.value);
   };
