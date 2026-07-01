@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const ACTIVE_MS = 2000; // poll interval while the pad is active
-const IDLE_MS = 15000; // poll interval once idle (still catches remote edits)
-const IDLE_AFTER = 10000; // go idle after this long with no activity
+const IDLE_MS = 30000; // poll interval once idle (still catches remote edits)
+const IDLE_AFTER = 5000; // go idle after this long with no activity
 
 export function Pad({ slug }: { slug: string }) {
   const [text, setText] = useState('');
